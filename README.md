@@ -11,21 +11,39 @@ VoiceGuard uses the **AASIST** (Audio Anti-Spoofing using Integrated Spectro-Tem
 ```
 VoiceGuard/
 ├── frontend/          # React + Vite + TypeScript + Tailwind CSS
+│   ├── public/
+│   │   └── audio-processor.js # AudioWorklet processor (PCM capture) ← Phase 3
+│   ├── src/
+│   │   ├── hooks/
+│   │   │   └── useAudioStream.ts # Real-time streaming hook ← Phase 3
+│   │   ├── pages/
+│   │   │   └── Live.tsx          # Real-time detection UI ← Phase 3
+│   │   ├── types/
+│   │   │   └── detection.ts      # WebSocket message types ← Phase 3
+│   │   ├── App.tsx               # Navigation tabs (Home / Live)
+│   │   └── main.tsx
+│   ├── package.json
+│   └── vite.config.ts
 ├── backend/           # FastAPI + Python
 │   ├── api/
 │   │   ├── health.py        # GET /health
-│   │   └── analyze.py       # POST /api/analyze  ← Phase 2
+│   │   └── analyze.py       # POST /api/analyze (Phase 2, uses ModelManager singleton)
 │   ├── audio/               # Audio processing module ← Phase 2
 │   │   ├── processor.py     # Load, mono, resample, normalize
 │   │   ├── vad.py           # Energy-based VAD
 │   │   └── chunker.py       # AASIST-sized chunking
 │   ├── services/
-│   │   └── analyzer.py      # Full pipeline orchestrator ← Phase 2
-│   ├── main.py
+│   │   ├── analyzer.py      # File pipeline orchestrator
+│   │   ├── model_manager.py # AASIST model singleton (loaded once) ← Phase 3
+│   │   └── risk_engine.py   # Rolling EWMA risk engine ← Phase 3
+│   ├── websocket/           # WebSocket streaming ← Phase 3
+│   │   ├── audio_buffer.py  # Per-connection sample accumulator
+│   │   └── audio_stream.py  # /ws/audio endpoint handler
+│   ├── main.py              # FastAPI lifespan & routes
 │   └── requirements.txt
 ├── ml/                # ML layer (AASIST)
 │   ├── aasist/
-│   │   ├── model.py          # AASIST architecture
+│   │   ├── model.py          # Official AASIST architecture
 │   │   └── pretrained/       # AASIST.pth (auto-downloaded)
 │   ├── detector.py           # AASISTDetector class
 │   ├── preprocessing.py      # Audio loading & preprocessing
@@ -35,8 +53,9 @@ VoiceGuard/
 │   └── fake/          # Place spoof WAV files here for local testing
 ├── tests/
 │   ├── test_detector.py         # Phase 1 single-file test
-│   ├── test_audio_processing.py # Phase 2 unit tests (no model needed)
-│   └── evaluate_audio.py        # Phase 2 batch evaluation script
+│   ├── test_audio_processing.py # Phase 2 unit tests
+│   ├── evaluate_audio.py        # Phase 2 batch evaluation script
+│   └── test_websocket.py       # Phase 3 unit & endpoint tests ← Phase 3
 ├── docs/
 ├── .gitignore
 └── README.md
@@ -46,8 +65,8 @@ VoiceGuard/
 
 ## ⚠️ ASVspoof Dataset — NOT Required
 
-**Neither Phase 1 nor Phase 2 require the ASVspoof dataset.**
-You only need WAV audio files of your own to test AASIST inference.
+**Phase 1, Phase 2, and Phase 3 do NOT require the ASVspoof dataset.**
+You only need WAV audio files of your own or a microphone to test AASIST inference.
 
 ---
 
@@ -90,7 +109,7 @@ Open: http://localhost:5173
 
 The pretrained AASIST checkpoint (`AASIST.pth`, ~17 MB) is **automatically downloaded** from the official [clovaai/aasist](https://github.com/clovaai/aasist) repository the first time you run inference.
 
-It will be saved to:
+It is saved to:
 ```
 ml/aasist/pretrained/AASIST.pth
 ```
@@ -98,182 +117,98 @@ ml/aasist/pretrained/AASIST.pth
 ### Manual download (if auto-download fails)
 
 1. Visit: https://github.com/clovaai/aasist/blob/main/models/weights/AASIST.pth
-2. Click **"Download raw file"**
-3. Place the file at: `ml/aasist/pretrained/AASIST.pth`
+2. Download `AASIST.pth`
+3. Place it in `ml/aasist/pretrained/AASIST.pth`
 
 ---
 
-## Running the Backend (FastAPI)
+## Phase 3: Real-Time Audio Streaming Architecture
 
-```bash
-cd VoiceGuard/backend
-uvicorn main:app --reload --host 0.0.0.0 --port 8000
+```
+Browser Microphone
+       │
+AudioWorklet (public/audio-processor.js)
+  - Captures 128-sample Float32 PCM blocks
+       │
+WebSocket Binary Frames (/ws/audio)
+       │
+Backend AudioBuffer (backend/websocket/audio_buffer.py)
+  - Accumulates ~4.0 s of raw audio at native rate
+  - Sliding window (keeps 1.0 s overlap)
+       │
+Audio Normalization & VAD Check (Energy-based)
+       │ (if speech detected)
+AASIST Inference (ml/detector.py via ModelManager singleton)
+  - Executed in thread executor (non-blocking)
+       │
+Rolling Risk Engine (backend/services/risk_engine.py)
+  - Exponential Weighted Moving Average (EWMA, α = 0.4)
+  - Low (<0.35), Medium (0.35–0.65), High (≥0.65)
+  - Stability guard: requires ≥2 speech chunks before emitting HIGH risk
+       │
+WebSocket JSON Messages → Live UI (/live)
+  - Live risk badge, spoof probability, EWMA risk score, recent score history
 ```
 
-Verify it's running:
-```bash
-curl http://localhost:8000/health
-# Expected: {"status":"ok"}
-```
+### WebSocket API Protocol (`/ws/audio`)
 
-Interactive API docs: http://localhost:8000/docs
-
-### POST /api/analyze (Phase 2)
-
-Upload a WAV file for full pipeline analysis:
-
-```bash
-curl -X POST http://localhost:8000/api/analyze \
-  -F "file=@data/real/sample.wav"
-```
-
-Response:
-```json
-{
-  "prediction": "real",
-  "spoof_probability": 0.0312,
-  "chunks_analyzed": 3
-}
-```
+1. **Connection handshake**:
+   - Server sends: `{"type": "status", "status": "connected"}`
+2. **Client configuration** (optional, recommended):
+   - Client sends JSON: `{"type": "config", "sample_rate": 44100}`
+   - Server replies: `{"type": "status", "status": "listening", "native_sample_rate": 44100}`
+3. **Streaming audio**:
+   - Client sends binary frames of raw float32 PCM samples (128 samples per chunk)
+4. **Detection results**:
+   - Server emits:
+     ```json
+     {
+       "type": "detection",
+       "spoof_probability": 0.02,
+       "prediction": "real",
+       "risk_score": 0.03,
+       "risk_level": "low",
+       "chunks_analyzed": 1,
+       "timestamp": "2026-09-04T12:00:00.000Z"
+     }
+     ```
 
 ---
 
-## Audio Processing Pipeline (Phase 2)
+## Testing & Verification
 
-The Phase 2 pipeline runs in this order:
-
-```
-WAV file
-  ↓
-AudioProcessor
-  → Validate (extension, size, corruption)
-  → Stereo → Mono (channel averaging)
-  → Resample to 16,000 Hz
-  → Peak normalize (no clipping)
-  ↓
-VoiceActivityDetector (energy-based)
-  → Split into 20 ms frames
-  → Compute RMS energy per frame
-  → Skip inference if audio is silent
-  ↓
-AudioChunker
-  → Split into ≈ 4.04 s segments (64,600 samples each)
-  → 1.0 s overlap between chunks
-  → Pad short final chunk by repeating
-  ↓
-AASISTDetector × N  (one call per chunk)
-  → Real model inference, no fake values
-  ↓
-Aggregation (arithmetic mean of spoof probabilities)
-  ↓
-Prediction + Spoof Probability
-```
-
-**Why 4.04 s chunks?**  
-AASIST was trained on exactly 64,600-sample windows at 16,000 Hz
-(`64600 / 16000 = 4.0375 s`). Every chunk must match this exactly.
-
-**Why arithmetic mean aggregation?**  
-The mean balances sensitivity across all chunks. A single suspicious
-window raises the score without completely dominating the result, unlike
-max-pooling. The strategy is configurable (`AggregationStrategy.MEAN` or
-`AggregationStrategy.MAX`).
-
----
-
-## Testing
-
-### Unit Tests (no model or audio files required)
+### Unit Tests (All Phase 2 & Phase 3 components)
 
 ```bash
-# From VoiceGuard root:
-pip install pytest
-pip install -r ml/requirements.txt
-pytest tests/test_audio_processing.py -v
+# Run all 51 automated unit tests:
+pytest tests/test_audio_processing.py tests/test_websocket.py -v
 ```
 
 Tests cover:
-- Mono WAV loading
-- Stereo → mono conversion
-- Resampling (8 kHz, 44.1 kHz → 16 kHz)
-- Silent audio handling
-- Very short audio padding
-- Invalid/corrupted file handling
-- Normalization (peak ≤ 1.0)
-- VAD on silent / speech-like / mixed waveforms
-- Chunker output shapes and chunk counts
-- Overlap increases chunk count
+- Audio loading, stereo-to-mono, resampling, peak normalization, silence handling
+- Energy-based VAD (frames, silence, noise, mixed speech)
+- Audio chunker (shapes, 64600 samples, overlap)
+- AudioBuffer (push_bytes, sample accumulation, sliding window, memory cap)
+- RollingRiskEngine (EWMA decay, minimum chunks guard, risk levels, history capping)
+- ModelManager singleton
+- WebSocket connection, config exchange, error handling
 
-### Single-file Test (Phase 1, requires model + WAV)
+### Single-file AASIST Test (Phase 1)
 
 ```bash
 python tests/test_detector.py data/real/sample.wav
 ```
 
-### Batch Evaluation (Phase 2, requires model + WAV files)
-
-Place WAV files in `data/real/` and/or `data/fake/`, then:
+### Batch Evaluation Script (Phase 2)
 
 ```bash
-# From VoiceGuard root:
 python tests/evaluate_audio.py
 ```
 
-This will:
-1. Load the AASIST model (auto-downloads checkpoint if needed)
-2. Run the full pipeline on every WAV file found
-3. Print per-file: prediction, spoof probability, chunks, duration, inference time
-4. If ≥ 1 real + ≥ 1 fake file: compute accuracy, precision, recall, F1, confusion matrix
-
-**⚠️ Important limitations:**
-- Metrics computed from your sample set do NOT prove model accuracy
-- AASIST was trained on ASVspoof LA; performance on other distributions is not guaranteed
-- A small sample set is not statistically significant
-
 ---
 
-## Phase 1 Checklist
+## Phase Completion Status
 
-- [x] FastAPI backend with `GET /health`
-- [x] React frontend with backend status indicator
-- [x] Frontend ↔ Backend communication (CORS configured)
-- [x] AASIST model integrated with pretrained checkpoint
-- [x] Real inference (no fake/random values)
-- [x] Audio preprocessing (mono, 16kHz, 64600 samples)
-- [x] Test script with clear output
-
-## Phase 2 Checklist
-
-- [x] Audio loading and validation
-- [x] Stereo → mono conversion
-- [x] Resampling to 16,000 Hz
-- [x] Peak normalization (no clipping, silence handled)
-- [x] Energy-based VAD (20 ms frames, language-agnostic)
-- [x] Audio chunking (4.04 s / 64,600 samples, 1 s overlap, configurable)
-- [x] AASIST processes each chunk via `predict_waveform()`
-- [x] Chunk scores aggregated (mean, configurable strategy)
-- [x] `POST /api/analyze` endpoint
-- [x] Batch evaluation script
-- [x] Unit tests (no model or data files required)
-- [x] Inference time measured per chunk and total
-- [x] README updated
-
-## Phase 3 (Not implemented yet)
-
-- WebSocket streaming
-- Live microphone input
-- Real-time VAD optimization
-- Supabase integration
-- Authentication
-- Dashboard & analytics
-- Replay detection
-- Render deployment
-
----
-
-## References
-
-- AASIST paper: https://arxiv.org/abs/2110.01200
-- Official AASIST repo: https://github.com/clovaai/aasist
-- FastAPI docs: https://fastapi.tiangolo.com
-- Vite docs: https://vitejs.dev
+- [x] **Phase 1**: Core backend + frontend communication, pretrained AASIST integration, single-file testing.
+- [x] **Phase 2**: Full audio processing pipeline (mono, resampling, normalization, energy VAD, chunking, aggregation), upload API (`POST /api/analyze`), batch evaluation script.
+- [x] **Phase 3**: Real-time WebSocket streaming (`/ws/audio`), AudioWorklet microphone capture, server-side buffering with sliding window, ModelManager singleton, EWMA rolling risk engine, live detection UI (`/live`).

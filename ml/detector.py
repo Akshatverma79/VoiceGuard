@@ -215,14 +215,19 @@ class AASISTDetector:
                 f"Details: {exc}"
             ) from exc
 
-        # Add batch dimension: (1, 1, 64600)
-        waveform = waveform.unsqueeze(0).to(self._device)
+        # Ensure waveform is shape (1, 64600)
+        if waveform.dim() == 1:
+            waveform = waveform.unsqueeze(0)
+        elif waveform.dim() == 3 and waveform.shape[1] == 1:
+            waveform = waveform.squeeze(1)
+        waveform = waveform.to(self._device)
 
         # Run inference
         t_start = time.perf_counter()
         try:
             with torch.no_grad():
-                logits = self._model(waveform)  # (1, 2)
+                out = self._model(waveform)
+                logits = out[1] if isinstance(out, (tuple, list)) else out
         except Exception as exc:
             raise RuntimeError(
                 f"[VoiceGuard] Model inference failed.\n"
@@ -257,7 +262,7 @@ class AASISTDetector:
         It accepts a tensor directly, avoiding any disk I/O.
 
         Args:
-            waveform: float32 Tensor of shape (1, 64600).
+            waveform: float32 Tensor of shape (1, 64600) or (64600,).
                       Must already be at 16 kHz, mono, and normalized.
                       Produced by AudioChunker.chunk().
 
@@ -272,19 +277,24 @@ class AASISTDetector:
             ValueError: If waveform has incorrect shape.
             RuntimeError: If model inference fails.
         """
-        if waveform.dim() != 2 or waveform.shape[0] != 1:
+        if waveform.dim() == 1:
+            x = waveform.unsqueeze(0)
+        elif waveform.dim() == 2:
+            x = waveform
+        elif waveform.dim() == 3 and waveform.shape[1] == 1:
+            x = waveform.squeeze(1)
+        else:
             raise ValueError(
-                f"[VoiceGuard] predict_waveform expects shape (1, N), "
+                f"[VoiceGuard] predict_waveform expects shape (1, N) or (N,), "
                 f"got {tuple(waveform.shape)}"
             )
-
-        # Add batch dimension: (1, 1, N)
-        x = waveform.unsqueeze(0).to(self._device)
+        x = x.to(self._device)
 
         t_start = time.perf_counter()
         try:
             with torch.no_grad():
-                logits = self._model(x)  # (1, 2)
+                out = self._model(x)
+                logits = out[1] if isinstance(out, (tuple, list)) else out
         except Exception as exc:
             raise RuntimeError(
                 f"[VoiceGuard] Model inference failed on waveform tensor.\n"

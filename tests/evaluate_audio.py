@@ -26,6 +26,9 @@ import time
 from pathlib import Path
 from typing import List, Tuple, Dict, Any
 
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+
 # ── Path setup ─────────────────────────────────────────────────────────────
 _TESTS_DIR = Path(__file__).parent.resolve()
 _ROOT = _TESTS_DIR.parent.resolve()

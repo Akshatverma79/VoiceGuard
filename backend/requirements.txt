@@ -1,7 +1,11 @@
-# VoiceGuard Backend — Phase 1 + Phase 2 dependencies
+# VoiceGuard Backend — Phase 1 + Phase 2 + Phase 3 dependencies
 fastapi==0.111.0
 uvicorn[standard]==0.29.0
 python-multipart==0.0.9
 
 # Testing
 pytest>=8.0.0
+pytest-asyncio>=0.23.0
+
+# WebSocket testing
+websockets>=12.0

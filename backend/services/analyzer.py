@@ -132,17 +132,24 @@ class AudioAnalyzer:
 
     Args:
         strategy : Aggregation strategy. Default: MEAN.
+        detector : Optional pre-loaded AASISTDetector (from ModelManager).
+                   If None, the model is lazy-loaded on the first analyze() call.
+                   In Phase 3, pass ModelManager.get_detector() to avoid double-loading.
 
-    The AASIST model is loaded lazily on the first call to analyze().
-    Subsequent calls reuse the same loaded model.
+    The AASIST model is loaded lazily on the first call to analyze() if no
+    detector is supplied. Subsequent calls reuse the same loaded model.
     """
 
-    def __init__(self, strategy: AggregationStrategy = AggregationStrategy.MEAN) -> None:
+    def __init__(
+        self,
+        strategy: AggregationStrategy = AggregationStrategy.MEAN,
+        detector: Optional[Any] = None,
+    ) -> None:
         self._strategy = strategy
         self._processor = AudioProcessor()
         self._vad = VoiceActivityDetector()
         self._chunker = AudioChunker()
-        self._detector: Optional[Any] = None  # lazy-loaded
+        self._detector: Optional[Any] = detector  # may be pre-loaded or lazy
 
     def _get_detector(self) -> Any:
         if self._detector is None:
