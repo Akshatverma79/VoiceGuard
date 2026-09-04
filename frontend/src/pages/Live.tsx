@@ -236,7 +236,9 @@ export default function Live() {
             {/* Spoof probability */}
             <div className="flex flex-col items-center gap-1">
               <span className="text-5xl font-black tracking-tight text-white">{probPct}</span>
-              <span className="text-xs text-slate-500 uppercase tracking-widest">Spoof Probability</span>
+              <span className="text-xs text-slate-500 uppercase tracking-widest">
+                {sessionStatus === "waiting_for_speech" && latestDetection ? "Average Spoof Probability" : "Spoof Probability"}
+              </span>
             </div>
 
             {/* Divider */}

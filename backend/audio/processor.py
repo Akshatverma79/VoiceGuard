@@ -173,12 +173,17 @@ class AudioProcessor:
 
         try:
             waveform, sr = torchaudio.load(str(path))
-        except Exception as exc:
-            raise AudioLoadError(
-                f"Failed to load '{path}'. "
-                f"The file may be corrupted or in an unsupported encoding.\n"
-                f"Details: {exc}"
-            ) from exc
+        except Exception:
+            try:
+                import soundfile as sf
+                data, sr = sf.read(str(path), dtype="float32", always_2d=True)
+                waveform = torch.from_numpy(data.T)
+            except Exception as exc:
+                raise AudioLoadError(
+                    f"Failed to load '{path}'. "
+                    f"The file may be corrupted or in an unsupported encoding.\n"
+                    f"Details: {exc}"
+                ) from exc
 
         if waveform.numel() == 0 or waveform.shape[1] == 0:
             raise AudioLoadError(f"Audio file contains no samples: {path}")

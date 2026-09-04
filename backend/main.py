@@ -8,7 +8,14 @@ Phase 3 additions:
   - Version bump to 3.0.0
 """
 
+import sys
+from pathlib import Path
 from contextlib import asynccontextmanager
+
+# Ensure backend root is on sys.path
+_BACKEND_DIR = Path(__file__).parent.resolve()
+if str(_BACKEND_DIR) not in sys.path:
+    sys.path.insert(0, str(_BACKEND_DIR))
 
 from fastapi import FastAPI, WebSocket
 from fastapi.middleware.cors import CORSMiddleware

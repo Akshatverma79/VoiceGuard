@@ -13,7 +13,7 @@ This module handles loading and converting any WAV file to that format.
 
 import os
 from pathlib import Path
-from typing import Tuple
+from typing import Optional, Tuple
 
 import numpy as np
 import torch
@@ -24,28 +24,24 @@ SAMPLE_RATE: int = 16_000
 TARGET_SAMPLES: int = 64_600  # ~4.04 seconds at 16 kHz
 
 
-def load_wav(audio_path: str) -> Tensor:
+def load_wav(audio_path: str, target_samples: Optional[int] = None) -> Tensor:
     """
-    Load a WAV file and prepare it for AASIST inference.
+    Load a WAV file and preprocess it for model inference.
 
-    Steps:
-      1. Validate file exists and is readable
-      2. Load audio using torchaudio
-      3. Convert stereo → mono (average channels)
-      4. Resample to 16,000 Hz if needed
-      5. Pad (repeat) or trim to exactly TARGET_SAMPLES
-      6. Return as float32 Tensor of shape (1, TARGET_SAMPLES)
+    Pipeline:
+      1. Validate file exists and has .wav extension.
+      2. Read audio via torchaudio (soundfile fallback).
+      3. Convert stereo to mono by averaging channels.
+      4. Resample to 16 kHz.
+      5. Optionally pad or trim to target_samples (if specified).
+      6. Peak-normalize to prevent clipping.
 
     Args:
         audio_path: Absolute or relative path to a WAV file.
+        target_samples: Optional target sample length. If None, full audio is kept.
 
     Returns:
-        Tensor of shape (1, 64600) — ready for AASIST model.forward()
-
-    Raises:
-        FileNotFoundError: If the audio file does not exist.
-        ValueError: If the file is not a valid WAV or is unsupported.
-        RuntimeError: If audio processing fails for any other reason.
+        Tensor of shape (1, N) — ready for model inference.
     """
     path = Path(audio_path).resolve()
 
@@ -73,12 +69,17 @@ def load_wav(audio_path: str) -> Tensor:
 
     try:
         waveform, sr = torchaudio.load(str(path))
-    except Exception as exc:
-        raise ValueError(
-            f"Failed to load audio file '{path}'. "
-            f"The file may be corrupted or in an unsupported encoding.\n"
-            f"Details: {exc}"
-        ) from exc
+    except Exception:
+        try:
+            import soundfile as sf
+            data, sr = sf.read(str(path), dtype="float32", always_2d=True)
+            waveform = torch.from_numpy(data.T)
+        except Exception as exc:
+            raise ValueError(
+                f"Failed to load audio file '{path}'. "
+                f"The file may be corrupted or in an unsupported encoding.\n"
+                f"Details: {exc}"
+            ) from exc
 
     # waveform: (channels, samples)
     if waveform.numel() == 0:
@@ -95,7 +96,7 @@ def load_wav(audio_path: str) -> Tensor:
         resampler = torchaudio.transforms.Resample(orig_freq=sr, new_freq=SAMPLE_RATE)
         waveform = resampler(waveform)
 
-    # ── Pad or trim to TARGET_SAMPLES ─────────────────────────────────────
+    # ── Optional pad or trim ──────────────────────────────────────────────
     n_samples = waveform.shape[1]
 
     if n_samples == 0:
@@ -104,13 +105,13 @@ def load_wav(audio_path: str) -> Tensor:
             f"The original clip may be too short or corrupted: {path}"
         )
 
-    if n_samples < TARGET_SAMPLES:
-        # Repeat the clip until we reach TARGET_SAMPLES
-        repeats = (TARGET_SAMPLES // n_samples) + 1
-        waveform = waveform.repeat(1, repeats)
-
-    # Trim to exact length
-    waveform = waveform[:, :TARGET_SAMPLES]
+    if target_samples is not None:
+        if n_samples < target_samples:
+            # Repeat the clip until we reach target_samples
+            repeats = (target_samples // n_samples) + 1
+            waveform = waveform.repeat(1, repeats)
+        # Trim to exact length
+        waveform = waveform[:, :target_samples]
 
     # ── Normalize ─────────────────────────────────────────────────────────
     # AASIST operates on raw, unnormalized waveforms; the SincConv layer
@@ -140,5 +141,16 @@ def get_audio_info(audio_path: str) -> dict:
             "duration_s": round(info.num_frames / info.sample_rate, 2),
             "encoding": str(info.encoding),
         }
-    except Exception as exc:
-        return {"error": str(exc)}
+    except Exception:
+        try:
+            import soundfile as sf
+            info = sf.info(str(audio_path))
+            return {
+                "sample_rate": info.samplerate,
+                "num_channels": info.channels,
+                "num_frames": info.frames,
+                "duration_s": round(info.duration, 2),
+                "encoding": info.subtype,
+            }
+        except Exception as exc:
+            return {"error": str(exc)}

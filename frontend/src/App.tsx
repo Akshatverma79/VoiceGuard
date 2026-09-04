@@ -28,9 +28,16 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    pingBackend();
-    const interval = setInterval(pingBackend, POLL_INTERVAL_MS);
-    return () => clearInterval(interval);
+    const timer = setTimeout(() => {
+      void pingBackend();
+    }, 0);
+    const interval = setInterval(() => {
+      void pingBackend();
+    }, POLL_INTERVAL_MS);
+    return () => {
+      clearTimeout(timer);
+      clearInterval(interval);
+    };
   }, [pingBackend]);
 
   return (

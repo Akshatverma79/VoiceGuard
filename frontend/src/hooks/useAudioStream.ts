@@ -68,6 +68,7 @@ export function useAudioStream(): AudioStreamState & AudioStreamActions {
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectAttemptsRef = useRef(0);
   const activeRef = useRef(false);  // guards against stale closures on cleanup
+  const openWebSocketRef = useRef<(sampleRate: number) => void>(() => {});
 
   // ── Cleanup helper ─────────────────────────────────────────────────────
   const cleanup = useCallback(() => {
@@ -99,7 +100,7 @@ export function useAudioStream(): AudioStreamState & AudioStreamActions {
           wsRef.current.send(JSON.stringify({ type: "stop" }));
         }
         wsRef.current.close(1000, "User stopped");
-      } catch (_) {}
+      } catch {}
       wsRef.current = null;
     }
 
@@ -190,7 +191,7 @@ export function useAudioStream(): AudioStreamState & AudioStreamActions {
           `⚡ Reconnecting (${reconnectAttemptsRef.current}/${MAX_RECONNECT_ATTEMPTS})…`
         );
         setTimeout(() => {
-          if (activeRef.current) openWebSocket(sampleRate);
+          if (activeRef.current) openWebSocketRef.current(sampleRate);
         }, RECONNECT_DELAY_MS);
       } else {
         setSessionStatus("stopped");
@@ -199,6 +200,10 @@ export function useAudioStream(): AudioStreamState & AudioStreamActions {
       }
     };
   }, [cleanup]);
+
+  useEffect(() => {
+    openWebSocketRef.current = openWebSocket;
+  }, [openWebSocket]);
 
   // ── Start Analysis ─────────────────────────────────────────────────────
   const startAnalysis = useCallback(async () => {
