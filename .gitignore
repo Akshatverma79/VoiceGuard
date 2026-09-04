@@ -1,0 +1,62 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+.eggs/
+.env
+.venv
+env/
+venv/
+*.venv
+pip-wheel-metadata/
+
+# PyTorch / ML
+*.pth
+*.pt
+*.ckpt
+*.pkl
+*.h5
+*.hdf5
+
+# Keep pretrained directory but not the actual weights
+!ml/aasist/pretrained/.gitkeep
+
+# Data (local test audio only — never commit large datasets)
+data/real/*
+data/fake/*
+!data/real/.gitkeep
+!data/fake/.gitkeep
+
+# Node / Frontend
+frontend/node_modules/
+frontend/.env
+frontend/dist/
+frontend/build/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+logs/
+
+# Coverage
+.coverage
+htmlcov/
+.pytest_cache/
+
+# Secrets
+*.env
+.env.*
+secrets.json
