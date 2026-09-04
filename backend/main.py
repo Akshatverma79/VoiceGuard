@@ -1,17 +1,18 @@
 """
 VoiceGuard Backend — main.py
-FastAPI application entry point for Phase 1.
+FastAPI application entry point — Phase 1 + Phase 2.
 """
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from api.health import router as health_router
+from api.analyze import router as analyze_router
 
 app = FastAPI(
     title="VoiceGuard API",
     description="AI-Powered Real-Time Detection and Prevention of Voice Cloning Impersonation Attacks",
-    version="1.0.0",
+    version="2.0.0",
 )
 
 # ---------------------------------------------------------------------------
@@ -32,6 +33,7 @@ app.add_middleware(
 # Routers
 # ---------------------------------------------------------------------------
 app.include_router(health_router)
+app.include_router(analyze_router)
 
 
 @app.get("/", include_in_schema=False)

@@ -248,3 +248,62 @@ class AASISTDetector:
             "inference_time_s": inference_time,
             "device": str(self._device),
         }
+
+    def predict_waveform(self, waveform: "torch.Tensor") -> Dict[str, Any]:
+        """
+        Run AASIST inference on a pre-processed waveform Tensor.
+
+        This is the Phase 2 entry point used by the chunking pipeline.
+        It accepts a tensor directly, avoiding any disk I/O.
+
+        Args:
+            waveform: float32 Tensor of shape (1, 64600).
+                      Must already be at 16 kHz, mono, and normalized.
+                      Produced by AudioChunker.chunk().
+
+        Returns:
+            dict with keys:
+              - prediction (str): "real" or "spoof"
+              - spoof_probability (float): probability in [0.0, 1.0]
+              - real_probability (float): probability in [0.0, 1.0]
+              - inference_time_s (float): wall-clock time for this chunk
+
+        Raises:
+            ValueError: If waveform has incorrect shape.
+            RuntimeError: If model inference fails.
+        """
+        if waveform.dim() != 2 or waveform.shape[0] != 1:
+            raise ValueError(
+                f"[VoiceGuard] predict_waveform expects shape (1, N), "
+                f"got {tuple(waveform.shape)}"
+            )
+
+        # Add batch dimension: (1, 1, N)
+        x = waveform.unsqueeze(0).to(self._device)
+
+        t_start = time.perf_counter()
+        try:
+            with torch.no_grad():
+                logits = self._model(x)  # (1, 2)
+        except Exception as exc:
+            raise RuntimeError(
+                f"[VoiceGuard] Model inference failed on waveform tensor.\n"
+                f"Details: {exc}"
+            ) from exc
+        t_end = time.perf_counter()
+
+        inference_time = round(t_end - t_start, 4)
+
+        probs = F.softmax(logits, dim=1).squeeze(0)  # (2,)
+        spoof_prob = float(probs[1].item())
+        real_prob = float(probs[0].item())
+        prediction = "spoof" if spoof_prob > real_prob else "real"
+
+        return {
+            "prediction": prediction,
+            "spoof_probability": round(spoof_prob, 4),
+            "real_probability": round(real_prob, 4),
+            "inference_time_s": inference_time,
+            "device": str(self._device),
+        }
+

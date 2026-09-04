@@ -1,3 +1,7 @@
+# VoiceGuard ML requirements
+# Pin torchaudio to match torch version — mismatched versions cause DLL load errors on Windows.
 torch>=2.0.0
-torchaudio>=2.0.0
+torchaudio>=2.0.0,<3.0.0
 numpy>=1.24.0
+# soundfile provides the WAV backend for torchaudio on Windows (required when sox is unavailable)
+soundfile>=0.12.0
