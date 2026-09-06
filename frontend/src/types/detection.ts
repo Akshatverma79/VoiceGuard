@@ -1,11 +1,11 @@
 /**
- * VoiceGuard — src/types/detection.ts
+ * VoiceVeritas — src/types/detection.ts
  * Shared TypeScript types for WebSocket messages.
  */
 
 export type RiskLevel = "low" | "medium" | "high" | "unknown";
 
-/** Sent by the server after a successful AASIST inference */
+/** Sent by the server after a successful deepfake detection inference */
 export interface DetectionMessage {
   type: "detection";
   spoof_probability: number;

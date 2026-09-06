@@ -1,9 +1,9 @@
 /**
- * VoiceGuard — src/pages/Live.tsx
+ * VoiceVeritas — src/pages/Live.tsx
  * Real-time live detection page (Phase 3).
  *
  * Layout:
- *  - Header: VoiceGuard branding + phase badge
+ *  - Header: VoiceVeritas branding + phase badge
  *  - Control row: Start / Stop buttons, status indicators
  *  - Primary display: risk level ring + spoof probability
  *  - Score sparkline: recent chunk scores
@@ -18,42 +18,42 @@ import type { RiskLevel } from "../types/detection";
 
 function riskColor(level: RiskLevel): string {
   switch (level) {
-    case "high":   return "text-red-400";
+    case "high": return "text-red-400";
     case "medium": return "text-amber-400";
-    case "low":    return "text-emerald-400";
-    default:       return "text-slate-500";
+    case "low": return "text-emerald-400";
+    default: return "text-slate-500";
   }
 }
 
 function riskBg(level: RiskLevel): string {
   switch (level) {
-    case "high":   return "bg-red-500/10 border-red-500/30";
+    case "high": return "bg-red-500/10 border-red-500/30";
     case "medium": return "bg-amber-500/10 border-amber-500/30";
-    case "low":    return "bg-emerald-500/10 border-emerald-500/30";
-    default:       return "bg-slate-800/40 border-slate-700/40";
+    case "low": return "bg-emerald-500/10 border-emerald-500/30";
+    default: return "bg-slate-800/40 border-slate-700/40";
   }
 }
 
 function riskGlow(level: RiskLevel): string {
   switch (level) {
-    case "high":   return "shadow-red-500/20";
+    case "high": return "shadow-red-500/20";
     case "medium": return "shadow-amber-500/20";
-    case "low":    return "shadow-emerald-500/20";
-    default:       return "shadow-slate-700/10";
+    case "low": return "shadow-emerald-500/20";
+    default: return "shadow-slate-700/10";
   }
 }
 
 function riskLabel(level: RiskLevel): string {
   switch (level) {
-    case "high":   return "HIGH RISK";
+    case "high": return "HIGH RISK";
     case "medium": return "MEDIUM RISK";
-    case "low":    return "LOW RISK";
-    default:       return "ANALYZING…";
+    case "low": return "LOW RISK";
+    default: return "ANALYZING…";
   }
 }
 
 function predictionColor(p: "real" | "spoof" | null): string {
-  if (p === "real")  return "text-emerald-400";
+  if (p === "real") return "text-emerald-400";
   if (p === "spoof") return "text-red-400";
   return "text-slate-500";
 }
@@ -127,14 +127,14 @@ function StatusDot({ active }: { active: boolean }) {
 
 function SessionBadge({ status }: { status: SessionStatus }) {
   const map: Record<SessionStatus, { label: string; cls: string }> = {
-    idle:               { label: "IDLE",              cls: "bg-slate-800 text-slate-400" },
-    requesting_mic:     { label: "REQUESTING MIC",    cls: "bg-amber-500/20 text-amber-400" },
-    connecting:         { label: "CONNECTING",        cls: "bg-indigo-500/20 text-indigo-400 animate-pulse" },
-    listening:          { label: "LIVE",              cls: "bg-emerald-500/20 text-emerald-400" },
-    processing:         { label: "ANALYZING",         cls: "bg-violet-500/20 text-violet-400 animate-pulse" },
-    waiting_for_speech: { label: "WAITING",           cls: "bg-slate-700 text-slate-400" },
-    error:              { label: "ERROR",             cls: "bg-red-500/20 text-red-400" },
-    stopped:            { label: "STOPPED",           cls: "bg-slate-800 text-slate-500" },
+    idle: { label: "IDLE", cls: "bg-slate-800 text-slate-400" },
+    requesting_mic: { label: "REQUESTING MIC", cls: "bg-amber-500/20 text-amber-400" },
+    connecting: { label: "CONNECTING", cls: "bg-indigo-500/20 text-indigo-400 animate-pulse" },
+    listening: { label: "LIVE", cls: "bg-emerald-500/20 text-emerald-400" },
+    processing: { label: "ANALYZING", cls: "bg-violet-500/20 text-violet-400 animate-pulse" },
+    waiting_for_speech: { label: "WAITING", cls: "bg-slate-700 text-slate-400" },
+    error: { label: "ERROR", cls: "bg-red-500/20 text-red-400" },
+    stopped: { label: "STOPPED", cls: "bg-slate-800 text-slate-500" },
   };
   const { label, cls } = map[status];
   return (
@@ -173,7 +173,7 @@ export default function Live() {
 
   // Format probability as percentage
   const probPct = spoofProb !== null ? `${(spoofProb * 100).toFixed(1)}%` : "—";
-  const riskPct = riskScore  !== null ? `${(riskScore  * 100).toFixed(1)}%` : "—";
+  const riskPct = riskScore !== null ? `${(riskScore * 100).toFixed(1)}%` : "—";
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-indigo-950 p-6 flex flex-col gap-6 items-center">
@@ -181,10 +181,10 @@ export default function Live() {
       {/* ── Header ── */}
       <div className="flex flex-col items-center gap-2 pt-4">
         <h1 className="text-3xl font-black tracking-tight text-white">
-          Voice<span className="text-transparent bg-clip-text bg-gradient-to-r from-indigo-400 to-violet-400">Guard</span>
+          Voice<span className="text-transparent bg-clip-text bg-gradient-to-r from-indigo-400 to-violet-400">Veritas</span>
           <span className="text-slate-500 text-xl font-medium ml-3">Live Detection</span>
         </h1>
-        <p className="text-slate-500 text-sm font-mono">SIH26104 · Phase 3 · Real-Time Analysis</p>
+        <p className="text-slate-500 text-sm font-mono">SIH26104 · Real-Time Analysis</p>
       </div>
 
       {/* ── Control row ── */}
@@ -308,10 +308,10 @@ export default function Live() {
           <p className="text-xs font-bold tracking-widest text-slate-500 uppercase mb-4">Latency (last chunk)</p>
           {latestPerf ? (
             <div className="space-y-3">
-              <Row label="Buffer"      val={`${latestPerf.buffer_s.toFixed(2)} s`} />
-              <Row label="Preprocess"  val={`${latestPerf.preprocess_ms} ms`} />
-              <Row label="AASIST"      val={`${latestPerf.inference_ms} ms`} />
-              <Row label="Total"       val={`${latestPerf.total_ms} ms`} highlight />
+              <Row label="Buffer" val={`${latestPerf.buffer_s.toFixed(2)} s`} />
+              <Row label="Preprocess" val={`${latestPerf.preprocess_ms} ms`} />
+              <Row label="AI Inference" val={`${latestPerf.inference_ms} ms`} />
+              <Row label="Total" val={`${latestPerf.total_ms} ms`} highlight />
             </div>
           ) : (
             <p className="text-slate-600 text-sm text-center mt-4">No data yet</p>
@@ -323,7 +323,7 @@ export default function Live() {
       {/* ── Limitations notice ── */}
       <div className="w-full max-w-2xl bg-slate-900/40 border border-slate-800/40 rounded-xl p-4 text-slate-600 text-xs text-center">
         ⚠️ Thresholds (LOW &lt; 35%, MEDIUM 35–65%, HIGH ≥ 65%) are starting values and require calibration.
-        Results are from real AASIST inference, not fabricated values.
+        Results are from real AI model inference, not fabricated values.
       </div>
     </div>
   );

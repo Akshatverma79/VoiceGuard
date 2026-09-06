@@ -41,7 +41,13 @@ for _p in [str(_ML_DIR), str(_ROOT_DIR)]:
         sys.path.insert(0, _p)
 
 # ── Local imports ──────────────────────────────────────────────────────────
-from audio.processor import AudioProcessor, SilentAudioError, AudioLoadError, UnsupportedFormatError
+from audio.processor import (
+    AudioProcessor,
+    SilentAudioError,
+    TooShortAudioError,
+    AudioLoadError,
+    UnsupportedFormatError,
+)
 from audio.vad import VoiceActivityDetector
 from audio.chunker import AudioChunker
 
@@ -77,6 +83,9 @@ class AnalysisResult:
         aggregation_strategy    : which strategy was used
         chunk_scores            : list of per-chunk spoof probabilities
         device                  : torch device used ("cpu" or "cuda")
+        risk_level              : "low", "medium", or "high"
+        risk_score              : risk score in [0, 1]
+        recommendation          : action advisory recommendation
         error                   : error message if pipeline failed (else None)
     """
     prediction: str
@@ -89,14 +98,22 @@ class AnalysisResult:
     aggregation_strategy: str
     chunk_scores: List[float]
     device: str
+    risk_level: str = "low"
+    risk_score: float = 0.0
+    recommendation: str = ""
     error: Optional[str] = None
 
     def to_api_response(self) -> Dict[str, Any]:
-        """Minimal API response matching the Phase 2 spec."""
+        """API response matching the upload analysis spec."""
         return {
             "prediction": self.prediction,
             "spoof_probability": self.spoof_probability,
+            "risk_level": self.risk_level,
+            "risk_score": self.risk_score,
             "chunks_analyzed": self.chunks_analyzed,
+            "audio_duration_s": self.audio_duration_s,
+            "chunk_scores": self.chunk_scores,
+            "recommendation": self.recommendation,
         }
 
     def to_dict(self) -> Dict[str, Any]:
@@ -104,6 +121,8 @@ class AnalysisResult:
         return {
             "prediction": self.prediction,
             "spoof_probability": self.spoof_probability,
+            "risk_level": self.risk_level,
+            "risk_score": self.risk_score,
             "chunks_analyzed": self.chunks_analyzed,
             "audio_duration_s": self.audio_duration_s,
             "total_inference_time_s": self.total_inference_time_s,
@@ -111,6 +130,7 @@ class AnalysisResult:
             "vad_speech_ratio": self.vad_speech_ratio,
             "aggregation_strategy": self.aggregation_strategy,
             "chunk_scores": self.chunk_scores,
+            "recommendation": self.recommendation,
             "device": self.device,
             "error": self.error,
         }
@@ -144,9 +164,10 @@ class AudioAnalyzer:
         self,
         strategy: AggregationStrategy = AggregationStrategy.MEAN,
         detector: Optional[Any] = None,
+        min_duration_s: float = 0.5,
     ) -> None:
         self._strategy = strategy
-        self._processor = AudioProcessor()
+        self._processor = AudioProcessor(min_duration_s=min_duration_s)
         self._vad = VoiceActivityDetector()
         self._chunker = AudioChunker()
         self._detector: Optional[Any] = detector  # may be pre-loaded or lazy
@@ -159,10 +180,10 @@ class AudioAnalyzer:
 
     def analyze(self, audio_path: str) -> AnalysisResult:
         """
-        Run the full pipeline on a WAV file.
+        Run the full pipeline on an audio file (WAV, MP3, M4A).
 
         Args:
-            audio_path: Path to a WAV file.
+            audio_path: Path to an audio file.
 
         Returns:
             AnalysisResult — always returned, error field set on failure.
@@ -173,6 +194,8 @@ class AudioAnalyzer:
         try:
             audio = self._processor.process(path_str)
         except SilentAudioError as exc:
+            return self._error_result(str(exc))
+        except TooShortAudioError as exc:
             return self._error_result(str(exc))
         except (AudioLoadError, UnsupportedFormatError) as exc:
             return self._error_result(str(exc))
@@ -210,9 +233,19 @@ class AudioAnalyzer:
                 "All chunk inferences failed. The model may not be loaded correctly."
             )
 
-        # ── Step 5: Aggregate ─────────────────────────────────────────────
+        # ── Step 5: Aggregate & Risk Classification ───────────────────────
         agg_score = self._aggregate(chunk_scores)
         prediction = "spoof" if agg_score > 0.5 else "real"
+
+        if agg_score >= 0.65:
+            risk_level = "high"
+            recommendation = "Suspicious AI-generated voice detected. Verify the caller through another trusted channel."
+        elif agg_score >= 0.35:
+            risk_level = "medium"
+            recommendation = "Moderate anomalies detected. Inconclusive result — exercise caution."
+        else:
+            risk_level = "low"
+            recommendation = "Voice appears genuine. No significant synthetic patterns detected."
 
         total_time = round(sum(inference_times), 4)
         avg_time = round(total_time / len(inference_times), 4)
@@ -229,6 +262,9 @@ class AudioAnalyzer:
             aggregation_strategy=self._strategy.value,
             chunk_scores=[round(s, 4) for s in chunk_scores],
             device=device_str,
+            risk_level=risk_level,
+            risk_score=round(agg_score, 4),
+            recommendation=recommendation,
         )
 
     def _aggregate(self, scores: List[float]) -> float:

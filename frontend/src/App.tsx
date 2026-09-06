@@ -1,5 +1,5 @@
 /**
- * VoiceGuard — src/App.tsx
+ * VoiceVeritas — src/App.tsx
  * Root application component — Phase 1 + Phase 2 + Phase 3.
  *
  * Tab-based navigation (no react-router dependency):
@@ -10,8 +10,9 @@
 import { useEffect, useState, useCallback } from "react";
 import { checkHealth } from "./api/health";
 import Live from "./pages/Live";
+import ManualUpload from "./pages/ManualUpload";
 
-type Tab = "home" | "live";
+type Tab = "home" | "live" | "upload";
 type ConnectionStatus = "checking" | "connected" | "disconnected";
 
 const POLL_INTERVAL_MS = 5000;
@@ -46,12 +47,12 @@ export default function App() {
       {/* ── Top nav ── */}
       <nav className="flex items-center justify-between px-6 py-4 border-b border-slate-800/60 backdrop-blur-sm sticky top-0 z-50 bg-slate-950/80">
         {/* Brand */}
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-3 cursor-pointer" onClick={() => setActiveTab("home")}>
           <div className="flex items-center justify-center w-8 h-8 rounded-lg bg-gradient-to-br from-indigo-500 to-violet-600 shadow-lg shadow-indigo-500/20">
             <ShieldIcon className="w-5 h-5 text-white" />
           </div>
           <span className="text-white font-black tracking-tight">
-            Voice<span className="text-transparent bg-clip-text bg-gradient-to-r from-indigo-400 to-violet-400">Guard</span>
+            Voice<span className="text-transparent bg-clip-text bg-gradient-to-r from-indigo-400 to-violet-400">Veritas</span>
           </span>
         </div>
 
@@ -69,6 +70,12 @@ export default function App() {
             active={activeTab === "live"}
             onClick={() => setActiveTab("live")}
           />
+          <TabBtn
+            id="tab-upload"
+            label="📁 Audio Upload"
+            active={activeTab === "upload"}
+            onClick={() => setActiveTab("upload")}
+          />
         </div>
 
         {/* Backend status pill */}
@@ -83,9 +90,11 @@ export default function App() {
       {/* ── Page content ── */}
       <main className="flex-1">
         {activeTab === "home" ? (
-          <HomePage status={status} lastChecked={lastChecked} />
-        ) : (
+          <HomePage status={status} lastChecked={lastChecked} onNavigate={setActiveTab} />
+        ) : activeTab === "live" ? (
           <Live />
+        ) : (
+          <ManualUpload />
         )}
       </main>
     </div>
@@ -97,12 +106,14 @@ export default function App() {
 function HomePage({
   status,
   lastChecked,
+  onNavigate,
 }: {
   status: ConnectionStatus;
   lastChecked: string;
+  onNavigate: (tab: Tab) => void;
 }) {
   return (
-    <div className="flex flex-col items-center justify-center min-h-[calc(100vh-4rem)] relative overflow-hidden px-6 text-center gap-8">
+    <div className="flex flex-col items-center justify-center min-h-[calc(100vh-4rem)] relative overflow-hidden px-6 text-center gap-8 py-8">
       {/* Ambient orbs */}
       <div className="absolute top-1/4 left-1/4 w-96 h-96 bg-indigo-600/10 rounded-full blur-3xl pointer-events-none animate-pulse" />
       <div className="absolute bottom-1/4 right-1/4 w-80 h-80 bg-violet-600/10 rounded-full blur-3xl pointer-events-none animate-pulse" style={{ animationDelay: "1s" }} />
@@ -115,19 +126,19 @@ function HomePage({
       {/* Brand */}
       <div className="relative z-10 space-y-3">
         <h1 className="text-6xl font-black tracking-tight text-white leading-none">
-          Voice<span className="text-transparent bg-clip-text bg-gradient-to-r from-indigo-400 to-violet-400">Guard</span>
+          Voice<span className="text-transparent bg-clip-text bg-gradient-to-r from-indigo-400 to-violet-400">Veritas</span>
         </h1>
         <p className="text-xl text-slate-400 font-medium tracking-wide max-w-lg">
           AI-Powered Voice Deepfake Detection
         </p>
         <p className="text-sm text-slate-600 font-mono tracking-widest uppercase">
-          SIH26104 · Phase 3 · React + FastAPI + AASIST
+          SIH26104 · React + FastAPI
         </p>
       </div>
 
       {/* Feature badges */}
       <div className="relative z-10 flex flex-wrap justify-center gap-3">
-        {["Real-time WebSocket", "Browser Microphone", "AASIST Inference", "Rolling Risk Engine"].map((f) => (
+        {["Local Audio Upload", "Real-time WebSocket", "Browser Microphone", "AI Inference", "Rolling Risk Engine"].map((f) => (
           <span
             key={f}
             className="text-xs font-medium text-slate-400 bg-slate-900/60 border border-slate-800 rounded-full px-3 py-1"
@@ -135,6 +146,22 @@ function HomePage({
             {f}
           </span>
         ))}
+      </div>
+
+      {/* Action Buttons */}
+      <div className="relative z-10 flex items-center gap-4 flex-wrap justify-center">
+        <button
+          onClick={() => onNavigate("upload")}
+          className="px-6 py-3 rounded-xl font-bold text-sm bg-gradient-to-r from-indigo-500 to-violet-600 text-white shadow-lg shadow-indigo-500/25 hover:shadow-indigo-500/40 transition-all duration-200 hover:scale-105 active:scale-95 flex items-center gap-2"
+        >
+          📁 Manual Audio Upload
+        </button>
+        <button
+          onClick={() => onNavigate("live")}
+          className="px-6 py-3 rounded-xl font-bold text-sm bg-slate-800 border border-slate-700 text-slate-200 hover:bg-slate-700 hover:text-white shadow-lg transition-all duration-200 hover:scale-105 active:scale-95 flex items-center gap-2"
+        >
+          🎙️ Live Detection
+        </button>
       </div>
 
       {/* Status card */}
@@ -154,15 +181,6 @@ function HomePage({
           )}
         </div>
       </div>
-
-      {/* CTA */}
-      <div className="relative z-10">
-        <p className="text-slate-500 text-sm">
-          Click{" "}
-          <span className="text-indigo-400 font-semibold">🎙️ Live Detection</span>{" "}
-          in the navigation to start real-time analysis.
-        </p>
-      </div>
     </div>
   );
 }
@@ -181,11 +199,10 @@ function TabBtn({
     <button
       id={id}
       onClick={onClick}
-      className={`text-sm font-semibold px-4 py-1.5 rounded-lg transition-all duration-200 ${
-        active
-          ? "bg-gradient-to-r from-indigo-500 to-violet-600 text-white shadow-md"
-          : "text-slate-400 hover:text-white"
-      }`}
+      className={`text-sm font-semibold px-4 py-1.5 rounded-lg transition-all duration-200 ${active
+        ? "bg-gradient-to-r from-indigo-500 to-violet-600 text-white shadow-md"
+        : "text-slate-400 hover:text-white"
+        }`}
     >
       {label}
     </button>
