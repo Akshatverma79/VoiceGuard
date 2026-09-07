@@ -5,7 +5,7 @@ torchaudio>=2.0.0,<3.0.0
 numpy>=1.24.0
 # soundfile provides the WAV backend for torchaudio on Windows (required when sox is unavailable)
 soundfile>=0.12.0
-# Hugging Face dependencies for Wav2Vec2-Small-AntiDeepfake
+# Hugging Face dependencies for Wav2Vec2 Deepfake Voice Detector
 # IMPORTANT: transformers >=4.45 requires PyTorch >=2.3.
 # If you are on PyTorch 2.2.x (CPU-only default), pin to <4.45.
 transformers>=4.40.0,<4.45.0
