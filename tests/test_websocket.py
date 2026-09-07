@@ -5,9 +5,18 @@ Phase 3 test suite: AudioBuffer, RiskEngine, ModelManager, and WebSocket endpoin
 
 import math
 import struct
+import sys
+from pathlib import Path
 import pytest
 import numpy as np
 from unittest.mock import MagicMock, patch
+
+_ROOT = Path(__file__).parent.parent.resolve()
+_BACKEND = _ROOT / "backend"
+_ML = _ROOT / "ml"
+for p in [str(_ROOT), str(_BACKEND), str(_ML)]:
+    if p not in sys.path:
+        sys.path.insert(0, p)
 
 from backend.websocket.audio_buffer import AudioBuffer
 from backend.services.risk_engine import (
@@ -200,3 +209,227 @@ class TestWebSocketEndpoint:
                 websocket.send_text("INVALID_NOT_JSON")
                 err = websocket.receive_json()
                 assert err["type"] == "error"
+
+    def test_websocket_streaming_increments_chunks_analyzed(self):
+        from fastapi.testclient import TestClient
+        from backend.main import app
+        from backend.audio.vad import VADResult
+
+        fake_detector = MagicMock()
+        fake_detector.predict_waveform.return_value = {
+            "spoof_probability": 0.25,
+            "inference_time_s": 0.01,
+        }
+        fake_vad_result = VADResult(
+            has_speech=True,
+            speech_ratio=1.0,
+            n_frames=200,
+            n_speech_frames=200,
+            peak_rms=0.5,
+            mean_rms=0.5,
+        )
+
+        with patch("backend.websocket.audio_stream.ModelManager.get_detector", return_value=fake_detector), \
+             patch("backend.websocket.audio_stream._vad.detect", return_value=fake_vad_result):
+            with TestClient(app) as client:
+                with client.websocket_connect("/ws/audio") as ws:
+                    status = ws.receive_json()
+                    assert status["type"] == "status"
+
+                    ws.send_json({"type": "config", "sample_rate": 16000})
+                    listening = ws.receive_json()
+                    assert listening["type"] == "status"
+                    assert listening["status"] == "listening"
+
+                    # Send 5.0s of audio (80,000 float32 samples at 16 kHz)
+                    audio_window = (np.sin(np.linspace(0, 440 * 2 * np.pi * 5.0, 80000)) * 0.5).astype(np.float32)
+                    ws.send_bytes(audio_window.tobytes())
+
+                    # First window: status: processing -> detection -> optional perf
+                    proc1 = ws.receive_json()
+                    assert proc1["type"] == "status"
+                    assert proc1["status"] == "processing"
+
+                    det1 = ws.receive_json()
+                    assert det1["type"] == "detection"
+                    assert det1["chunks_analyzed"] == 1
+                    assert det1["spoof_probability"] == 0.25
+
+                    perf1 = ws.receive_json()
+                    assert perf1["type"] == "perf"
+
+                    # Send second 5.0s of audio
+                    ws.send_bytes(audio_window.tobytes())
+
+                    proc2 = ws.receive_json()
+                    assert proc2["type"] == "status"
+                    assert proc2["status"] == "processing"
+
+                    det2 = ws.receive_json()
+                    assert det2["type"] == "detection"
+                    assert det2["chunks_analyzed"] == 2
+                    assert det2["spoof_probability"] == 0.25
+
+                    perf2 = ws.receive_json()
+                    assert perf2["type"] == "perf"
+
+                    ws.close()
+
+    def test_websocket_two_chunk_moving_average(self):
+        from fastapi.testclient import TestClient
+        from backend.main import app
+        from backend.audio.vad import VADResult
+
+        fake_detector = MagicMock()
+        # Return alternating spoof scores: 0.8 on chunk 1, 0.2 on chunk 2, 0.8 on chunk 3
+        scores = iter([
+            {"spoof_probability": 0.80, "inference_time_s": 0.01},
+            {"spoof_probability": 0.20, "inference_time_s": 0.01},
+            {"spoof_probability": 0.80, "inference_time_s": 0.01},
+        ])
+        fake_detector.predict_waveform.side_effect = lambda chunk: next(scores)
+        fake_vad_result = VADResult(
+            has_speech=True,
+            speech_ratio=1.0,
+            n_frames=200,
+            n_speech_frames=200,
+            peak_rms=0.5,
+            mean_rms=0.5,
+        )
+
+        with patch("backend.websocket.audio_stream.ModelManager.get_detector", return_value=fake_detector), \
+             patch("backend.websocket.audio_stream._vad.detect", return_value=fake_vad_result):
+            with TestClient(app) as client:
+                with client.websocket_connect("/ws/audio") as ws:
+                    ws.receive_json()  # status: connected
+                    ws.send_json({"type": "config", "sample_rate": 16000})
+                    ws.receive_json()  # status: listening
+
+                    audio_window = (np.sin(np.linspace(0, 440 * 2 * np.pi * 5.0, 80000)) * 0.5).astype(np.float32)
+
+                    # Chunk 1: score 0.80 -> avg is 0.80 -> prediction "spoof"
+                    ws.send_bytes(audio_window.tobytes())
+                    assert ws.receive_json()["status"] == "processing"
+                    d1 = ws.receive_json()
+                    assert d1["spoof_probability"] == 0.80
+                    assert d1["prediction"] == "spoof"
+                    assert d1["chunks_analyzed"] == 1
+                    ws.receive_json()  # perf
+
+                    # Chunk 2: score 0.20 -> avg(0.80, 0.20) = 0.50 -> prediction "real" (<= 0.5)
+                    ws.send_bytes(audio_window.tobytes())
+                    assert ws.receive_json()["status"] == "processing"
+                    d2 = ws.receive_json()
+                    assert d2["spoof_probability"] == 0.50
+                    assert d2["prediction"] == "real"
+                    assert d2["chunks_analyzed"] == 2
+                    ws.receive_json()  # perf
+
+                    # Chunk 3: score 0.80 -> avg(0.20, 0.80) = 0.50 -> prediction "real"
+                    ws.send_bytes(audio_window.tobytes())
+                    assert ws.receive_json()["status"] == "processing"
+                    d3 = ws.receive_json()
+                    assert d3["spoof_probability"] == 0.50
+                    assert d3["prediction"] == "real"
+                    assert d3["chunks_analyzed"] == 3
+                    ws.receive_json()  # perf
+
+                    ws.close()
+
+    def test_websocket_waiting_for_speech_emits_overall_average(self):
+        from fastapi.testclient import TestClient
+        from backend.main import app
+        from backend.audio.vad import VADResult
+
+        fake_detector = MagicMock()
+        # Chunk 1: 0.80, Chunk 2: 0.40 -> overall average is 0.60
+        scores = iter([
+            {"spoof_probability": 0.80, "inference_time_s": 0.01},
+            {"spoof_probability": 0.40, "inference_time_s": 0.01},
+        ])
+        fake_detector.predict_waveform.side_effect = lambda chunk: next(scores)
+        fake_vad_speech = VADResult(
+            has_speech=True,
+            speech_ratio=1.0,
+            n_frames=200,
+            n_speech_frames=200,
+            peak_rms=0.5,
+            mean_rms=0.5,
+        )
+        fake_vad_silence = VADResult(
+            has_speech=False,
+            speech_ratio=0.0,
+            n_frames=200,
+            n_speech_frames=0,
+            peak_rms=0.0,
+            mean_rms=0.0,
+        )
+        vad_results = iter([fake_vad_speech, fake_vad_speech, fake_vad_silence])
+
+        with patch("backend.websocket.audio_stream.ModelManager.get_detector", return_value=fake_detector), \
+             patch("backend.websocket.audio_stream._vad.detect", side_effect=lambda w: next(vad_results)):
+            with TestClient(app) as client:
+                with client.websocket_connect("/ws/audio") as ws:
+                    ws.receive_json()  # connected
+                    ws.send_json({"type": "config", "sample_rate": 16000})
+                    ws.receive_json()  # listening
+
+                    audio_window = (np.sin(np.linspace(0, 440 * 2 * np.pi * 5.0, 80000)) * 0.5).astype(np.float32)
+
+                    # Chunk 1 (speech - 80,000 samples)
+                    ws.send_bytes(audio_window.tobytes())
+                    ws.receive_json()  # processing
+                    ws.receive_json()  # detection
+                    ws.receive_json()  # perf
+
+                    # Chunk 2 (speech - 64,000 samples completes 80,000 with 16,000 overlap)
+                    ws.send_bytes(audio_window[:64000].tobytes())
+                    ws.receive_json()  # processing
+                    ws.receive_json()  # detection
+                    ws.receive_json()  # perf
+
+                    # Now send silence (audio stops)
+                    silence = np.zeros(64000, dtype=np.float32)
+                    ws.send_bytes(silence.tobytes())
+
+                    # Server must emit detection with average of all chunks (0.80 + 0.40) / 2 = 0.60
+                    summary_det = ws.receive_json()
+                    assert summary_det["type"] == "detection"
+                    assert summary_det["spoof_probability"] == 0.60
+                    assert summary_det["prediction"] == "spoof"
+                    assert summary_det["chunks_analyzed"] == 2
+
+                    # Followed by status: waiting_for_speech
+                    wait_status = ws.receive_json()
+                    assert wait_status["type"] == "status"
+                    assert wait_status["status"] == "waiting_for_speech"
+
+                    ws.close()
+
+    def test_websocket_noise_gate_ignores_ambient_noise(self):
+        from fastapi.testclient import TestClient
+        from backend.main import app
+
+        with TestClient(app) as client:
+            with client.websocket_connect("/ws/audio") as ws:
+                status = ws.receive_json()
+                assert status["type"] == "status"
+
+                ws.send_json({"type": "config", "sample_rate": 16000})
+                listening = ws.receive_json()
+                assert listening["status"] == "listening"
+
+                # Send 5.0s of very faint ambient noise (peak amplitude 0.005 < MIN_SPEECH_PEAK 0.05)
+                faint_noise = (np.random.randn(80000) * 0.002).astype(np.float32)
+                ws.send_bytes(faint_noise.tobytes())
+
+                # Server should NOT trigger detection; must send waiting_for_speech
+                msg = ws.receive_json()
+                assert msg["type"] == "status"
+                assert msg["status"] == "waiting_for_speech"
+
+                ws.close()
+
+
+
+

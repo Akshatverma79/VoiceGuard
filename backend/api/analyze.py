@@ -63,21 +63,30 @@ def _get_analyzer() -> AudioAnalyzer:
     return _analyzer
 
 
+SUPPORTED_EXTENSIONS = {".wav", ".wave", ".mp3", ".m4a"}
+MAX_FILE_SIZE_BYTES = 50 * 1024 * 1024  # 50 MB
+
+
 @router.post(
     "/analyze",
     summary="Analyze audio for voice spoofing",
-    response_description="Prediction, spoof probability, and timing",
+    response_description="Prediction, spoof probability, risk level, and timing",
 )
 async def analyze_audio(
-    file: UploadFile = File(..., description="WAV audio file to analyze"),
+    file: UploadFile = File(..., description="Audio file to analyze (WAV, MP3, M4A)"),
 ) -> JSONResponse:
     """
-    Upload a WAV audio file and receive a spoofing prediction.
+    Upload an audio file (WAV, MP3, M4A) and receive a deepfake spoofing prediction.
 
     Returns:
     - **prediction**: `"real"` or `"spoof"`
     - **spoof_probability**: aggregated probability in [0.0, 1.0]
-    - **chunks_analyzed**: number of chunks sent to AASIST
+    - **risk_level**: `"low"`, `"medium"`, or `"high"`
+    - **risk_score**: risk score in [0.0, 1.0]
+    - **chunks_analyzed**: number of chunks processed by the detector
+    - **audio_duration_s**: total audio length in seconds
+    - **chunk_scores**: per-chunk spoof probabilities
+    - **recommendation**: safety / advisory recommendation
     - **processing_time_ms**: total wall-clock processing time
     """
     t_start = time.perf_counter()
@@ -85,38 +94,70 @@ async def analyze_audio(
     # ── Validate extension ─────────────────────────────────────────────────
     filename = file.filename or ""
     suffix = Path(filename).suffix.lower()
-    if suffix not in {".wav", ".wave"}:
+    if suffix not in SUPPORTED_EXTENSIONS:
         raise HTTPException(
             status_code=400,
-            detail=f"Unsupported file type '{suffix}'. Only WAV files are accepted.",
+            detail=f"Unsupported audio format '{suffix}'. Supported formats: WAV, MP3, M4A.",
         )
 
     # ── Read upload ────────────────────────────────────────────────────────
     try:
         audio_bytes = await file.read()
-    except Exception as exc:
-        raise HTTPException(status_code=400, detail=f"Failed to read uploaded file: {exc}")
+    except Exception:
+        raise HTTPException(
+            status_code=400,
+            detail="The uploaded audio could not be processed.",
+        )
 
     if len(audio_bytes) == 0:
-        raise HTTPException(status_code=400, detail="Uploaded file is empty.")
+        raise HTTPException(
+            status_code=400,
+            detail="The uploaded audio could not be processed. The file is empty.",
+        )
 
-    # ── Write to temp file (torchaudio requires a path) ───────────────────
-    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
+    if len(audio_bytes) > MAX_FILE_SIZE_BYTES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Audio file exceeds maximum size limit of {MAX_FILE_SIZE_BYTES // (1024 * 1024)} MB.",
+        )
+
+    # ── Write to temp file (decoders require a file path) ──────────────────
+    with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
         tmp.write(audio_bytes)
         tmp_path = tmp.name
 
     try:
         analyzer = _get_analyzer()
         result = analyzer.analyze(tmp_path)
+    except HTTPException:
+        raise
+    except Exception:
+        raise HTTPException(
+            status_code=500,
+            detail="Voice analysis failed. Please try again.",
+        )
     finally:
         try:
             os.unlink(tmp_path)
         except OSError:
             pass
 
-    # ── Handle pipeline errors ─────────────────────────────────────────────
+    # ── Handle pipeline errors with clean, user-friendly messages ──────────
     if result.error:
-        raise HTTPException(status_code=400, detail=result.error)
+        err = result.error
+        if "No speech detected" in err or "silent" in err.lower():
+            detail = "No sufficient speech detected in the uploaded audio."
+        elif "too short" in err.lower():
+            detail = "Audio is too short for reliable analysis."
+        elif "unsupported" in err.lower():
+            detail = "Unsupported audio format."
+        elif "failed to load" in err.lower() or "could not be processed" in err.lower():
+            detail = "The uploaded audio could not be processed."
+        elif "inferences failed" in err.lower():
+            detail = "Voice analysis failed. Please try again."
+        else:
+            detail = err
+        raise HTTPException(status_code=400, detail=detail)
 
     processing_ms = round((time.perf_counter() - t_start) * 1000)
 

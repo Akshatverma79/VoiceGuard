@@ -38,6 +38,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List
 
+import numpy as np
 import torch
 from fastapi import WebSocket, WebSocketDisconnect
 
@@ -58,9 +59,18 @@ from websocket.audio_buffer import AudioBuffer
 # ── Verbose performance logging (dev only) ─────────────────────────────────
 VERBOSE_PERF: bool = True   # set False to suppress perf messages in production
 
+# ── Noise floor / silence gate ─────────────────────────────────────────────
+# Thresholds below which incoming audio is treated as ambient room noise,
+# computer fan hum, or mic hiss, rather than meaningful speech.
+MIN_SPEECH_PEAK: float = 0.05
+MIN_SPEECH_RMS: float = 0.01
+
 # ── VAD & chunker (shared, stateless — safe to share across connections) ───
-_vad = VoiceActivityDetector()
-_chunker = AudioChunker(overlap_s=0.0)   # no overlap for streaming (lower latency)
+# Require at least 25% speech frames (1.25s of a 5s window) to reject noise clicks
+# and prevent the 1.0s overlap tail from registering as speech when speaking stops.
+_vad = VoiceActivityDetector(energy_threshold=0.03, min_speech_ratio=0.25)
+# 5-second chunk size (80,000 samples at 16 kHz) for stable, fast deepfake inference
+_chunker = AudioChunker(chunk_duration_s=5.0, overlap_s=0.0, target_samples=80_000)
 
 # ── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -135,6 +145,31 @@ async def handle_audio_stream(websocket: WebSocket) -> None:
     if initial_bytes:
         buffer.push_bytes(initial_bytes)
     risk = RiskEngine()
+    last_waiting_chunks: int = 0
+
+    async def _send_waiting(speech_ratio: float = 0.0) -> None:
+        nonlocal last_waiting_chunks
+        if risk.chunks_seen > 0 and risk.chunks_seen > last_waiting_chunks:
+            overall_avg = float(np.mean(list(risk._history)))
+            overall_pred = "spoof" if overall_avg > 0.5 else "real"
+            await _send(websocket, {
+                "type": "detection",
+                "spoof_probability": round(overall_avg, 4),
+                "raw_chunk_probability": round(overall_avg, 4),
+                "prediction": overall_pred,
+                "risk_score": round(overall_avg, 4),
+                "risk_level": "high" if overall_avg > 0.65 else ("medium" if overall_avg > 0.35 else "low"),
+                "chunks_analyzed": risk.chunks_seen,
+                "history": list(risk._history),
+                "timestamp": _now_iso(),
+            })
+            last_waiting_chunks = risk.chunks_seen
+
+        await _send(websocket, {
+            "type": "status",
+            "status": "waiting_for_speech",
+            "speech_ratio": speech_ratio,
+        })
 
     await _send(websocket, {
         "type": "status",
@@ -166,6 +201,7 @@ async def handle_audio_stream(websocket: WebSocket) -> None:
                 try:
                     ctrl = json.loads(raw["text"])
                     if ctrl.get("type") == "stop":
+                        await _send_waiting(0.0)
                         break
                 except Exception:
                     await _send(websocket, {"type": "error", "message": "Invalid JSON message"})
@@ -180,6 +216,14 @@ async def handle_audio_stream(websocket: WebSocket) -> None:
             samples = buffer.consume()
             buf_seconds = len(samples) / native_sr
 
+            # ── Noise floor / silence gate ────────────────────────────────
+            arr = np.asarray(samples, dtype=np.float32) if len(samples) > 0 else np.zeros(0, dtype=np.float32)
+            raw_peak = float(np.max(np.abs(arr))) if len(arr) > 0 else 0.0
+            raw_rms = float(np.sqrt(np.mean(arr ** 2))) if len(arr) > 0 else 0.0
+            if raw_peak < MIN_SPEECH_PEAK or raw_rms < MIN_SPEECH_RMS:
+                await _send_waiting(0.0)
+                continue
+
             # ── Step 2: Convert to tensor at 16 kHz ──────────────────────
             t_pre_start = time.perf_counter()
             try:
@@ -192,11 +236,7 @@ async def handle_audio_stream(websocket: WebSocket) -> None:
             # ── Step 3: VAD ───────────────────────────────────────────────
             vad_result = _vad.detect(waveform)
             if not vad_result.has_speech:
-                await _send(websocket, {
-                    "type": "status",
-                    "status": "waiting_for_speech",
-                    "speech_ratio": vad_result.speech_ratio,
-                })
+                await _send_waiting(vad_result.speech_ratio)
                 continue
 
             # ── Step 4: Chunk ─────────────────────────────────────────────
@@ -232,18 +272,23 @@ async def handle_audio_stream(websocket: WebSocket) -> None:
             agg_score = _aggregate_scores(chunk_scores)
             risk_result = risk.update(agg_score)
 
+            # 2-chunk moving average for live spoof probability & prediction
+            recent_scores = risk_result.history[-2:]
+            avg_spoof_prob = float(np.mean(recent_scores)) if recent_scores else agg_score
+
             total_inference_ms = round(sum(chunk_times) * 1000, 1)
             total_ms = round((time.perf_counter() - t_total_start) * 1000, 1)
-            prediction = "spoof" if agg_score > 0.5 else "real"
+            prediction = "spoof" if avg_spoof_prob > 0.5 else "real"
 
             # ── Step 7: Send detection result ─────────────────────────────
             await _send(websocket, {
                 "type": "detection",
-                "spoof_probability": round(agg_score, 4),
+                "spoof_probability": round(avg_spoof_prob, 4),
+                "raw_chunk_probability": round(agg_score, 4),
                 "prediction": prediction,
                 "risk_score": risk_result.risk_score,
                 "risk_level": risk_result.risk_level.value,
-                "chunks_analyzed": len(chunk_scores),
+                "chunks_analyzed": risk_result.chunks_seen,
                 "history": risk_result.history,
                 "timestamp": _now_iso(),
             })

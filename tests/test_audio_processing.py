@@ -106,8 +106,8 @@ class TestAudioProcessor:
             self.proc.process(str(p))
 
     def test_unsupported_extension_raises(self, tmp_path):
-        p = tmp_path / "audio.mp3"
-        p.write_bytes(b"fake mp3 data")
+        p = tmp_path / "audio.flac"
+        p.write_bytes(b"fake flac data")
         with pytest.raises(UnsupportedFormatError):
             self.proc.process(str(p))
 

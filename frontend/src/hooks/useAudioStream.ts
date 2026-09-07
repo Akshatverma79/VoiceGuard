@@ -1,5 +1,5 @@
 /**
- * VoiceGuard — src/hooks/useAudioStream.ts
+ * VoiceVeritas — src/hooks/useAudioStream.ts
  * React hook: microphone capture + WebSocket streaming + state management.
  *
  * Responsibilities:
@@ -14,7 +14,7 @@
  * AudioWorklet fires every 128 samples (≈ 2.9 ms at 44 100 Hz).
  * We forward each block as a binary WebSocket frame immediately.
  * The server-side AudioBuffer accumulates until 4 s worth of audio,
- * then triggers AASIST inference.
+ * then triggers deepfake detection inference.
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -68,6 +68,7 @@ export function useAudioStream(): AudioStreamState & AudioStreamActions {
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectAttemptsRef = useRef(0);
   const activeRef = useRef(false);  // guards against stale closures on cleanup
+  const openWebSocketRef = useRef<(sampleRate: number) => void>(() => { });
 
   // ── Cleanup helper ─────────────────────────────────────────────────────
   const cleanup = useCallback(() => {
@@ -88,7 +89,7 @@ export function useAudioStream(): AudioStreamState & AudioStreamActions {
 
     // Close AudioContext
     if (audioCtxRef.current && audioCtxRef.current.state !== "closed") {
-      audioCtxRef.current.close().catch(() => {});
+      audioCtxRef.current.close().catch(() => { });
       audioCtxRef.current = null;
     }
 
@@ -99,7 +100,7 @@ export function useAudioStream(): AudioStreamState & AudioStreamActions {
           wsRef.current.send(JSON.stringify({ type: "stop" }));
         }
         wsRef.current.close(1000, "User stopped");
-      } catch (_) {}
+      } catch { }
       wsRef.current = null;
     }
 
@@ -190,7 +191,7 @@ export function useAudioStream(): AudioStreamState & AudioStreamActions {
           `⚡ Reconnecting (${reconnectAttemptsRef.current}/${MAX_RECONNECT_ATTEMPTS})…`
         );
         setTimeout(() => {
-          if (activeRef.current) openWebSocket(sampleRate);
+          if (activeRef.current) openWebSocketRef.current(sampleRate);
         }, RECONNECT_DELAY_MS);
       } else {
         setSessionStatus("stopped");
@@ -199,6 +200,10 @@ export function useAudioStream(): AudioStreamState & AudioStreamActions {
       }
     };
   }, [cleanup]);
+
+  useEffect(() => {
+    openWebSocketRef.current = openWebSocket;
+  }, [openWebSocket]);
 
   // ── Start Analysis ─────────────────────────────────────────────────────
   const startAnalysis = useCallback(async () => {
@@ -254,7 +259,7 @@ export function useAudioStream(): AudioStreamState & AudioStreamActions {
     }
 
     const source = audioCtx.createMediaStreamSource(stream);
-    const workletNode = new AudioWorkletNode(audioCtx, "voiceguard-processor");
+    const workletNode = new AudioWorkletNode(audioCtx, "voiceveritas-processor");
     workletNodeRef.current = workletNode;
 
     // Forward PCM blocks to WebSocket as binary

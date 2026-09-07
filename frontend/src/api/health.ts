@@ -1,5 +1,5 @@
 /**
- * VoiceGuard — src/api/health.ts
+ * VoiceVeritas — src/api/health.ts
  * Health check API call to the FastAPI backend.
  */
 

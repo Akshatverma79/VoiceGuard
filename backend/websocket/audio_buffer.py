@@ -28,7 +28,7 @@ from typing import List, Optional
 
 # ── Buffer configuration constants ─────────────────────────────────────────
 # How many seconds to accumulate before triggering processing
-BUFFER_PROCESS_SECONDS: float = 4.0
+BUFFER_PROCESS_SECONDS: float = 5.0
 
 # How many seconds of overlap to keep after processing (sliding window)
 OVERLAP_SECONDS: float = 1.0
@@ -97,15 +97,17 @@ class AudioBuffer:
         Extract samples for processing, keeping the overlap tail.
 
         Returns:
-            The accumulated samples (at least process_samples long).
-            After this call, the buffer retains only the last overlap_samples.
+            The accumulated samples (process_samples long).
+            After this call, the buffer retains only the overlap tail from
+            the processed window.
         """
-        result = list(self._samples)
+        count = self._process_samples if len(self._samples) >= self._process_samples else len(self._samples)
+        result = self._samples[:count]
         # Keep overlap tail for the next window
-        if self._overlap_samples > 0:
-            self._samples = self._samples[-self._overlap_samples:]
+        if self._overlap_samples > 0 and count >= self._overlap_samples:
+            self._samples = self._samples[count - self._overlap_samples:]
         else:
-            self._samples = []
+            self._samples = self._samples[count:]
         return result
 
     def clear(self) -> None:

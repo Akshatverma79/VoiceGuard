@@ -1,5 +1,5 @@
 /**
- * VoiceGuard — public/audio-processor.js
+ * VoiceVeritas — public/audio-processor.js
  * AudioWorklet processor — runs in the browser's audio rendering thread.
  *
  * Receives 128-sample float32 PCM blocks from the microphone and posts
@@ -16,7 +16,7 @@
  *   { command: "stop" }        — stop posting audio
  */
 
-class VoiceGuardProcessor extends AudioWorkletProcessor {
+class VoiceVeritasProcessor extends AudioWorkletProcessor {
   constructor() {
     super();
     this._active = true;
@@ -45,4 +45,4 @@ class VoiceGuardProcessor extends AudioWorkletProcessor {
   }
 }
 
-registerProcessor("voiceguard-processor", VoiceGuardProcessor);
+registerProcessor("voiceveritas-processor", VoiceVeritasProcessor);
