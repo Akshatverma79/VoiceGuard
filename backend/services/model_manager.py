@@ -67,14 +67,14 @@ class ModelManager:
             from detector import AASISTDetector
             return AASISTDetector()
 
-        print("[VoiceGuard] Loading AASIST model at startup…")
+        print("[VoiceGuard] Loading model at startup...")
         try:
             cls._detector = await loop.run_in_executor(None, _load)
             cls._initialized = True
-            print("[VoiceGuard] AASIST model ready.")
+            print("[VoiceGuard] Model ready.")
         except Exception as exc:
-            print(f"[VoiceGuard] ❌ Failed to load AASIST model: {exc}")
-            raise RuntimeError(f"AASIST model failed to load: {exc}") from exc
+            print(f"[VoiceGuard] [FAIL] Failed to load model: {exc}")
+            raise RuntimeError(f"Model failed to load: {exc}") from exc
 
     @classmethod
     def get_detector(cls) -> object:
