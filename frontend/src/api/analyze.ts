@@ -15,6 +15,10 @@ export interface AnalyzeSuccessResponse {
   chunk_scores?: number[];
   recommendation: string;
   processing_time_ms: number;
+  // Demo override cache fields
+  sha256_hash?: string;
+  from_cache?: boolean;
+  cache_note?: string;
 }
 
 export interface AnalyzeErrorResponse {

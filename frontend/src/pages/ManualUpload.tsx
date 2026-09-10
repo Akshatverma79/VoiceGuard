@@ -13,6 +13,12 @@
 
 import { useState, useRef, useEffect, useCallback } from "react";
 import { uploadAndAnalyzeAudio, type AnalyzeSuccessResponse } from "../api/analyze";
+import {
+  fetchOverrides,
+  saveOverride,
+  deleteOverride,
+  type OverrideEntry,
+} from "../api/overrides";
 
 type LoadingStage =
   | "idle"
@@ -62,6 +68,167 @@ function formatDuration(seconds: number): string {
   return `${secs}.${ms}s`;
 }
 
+// ── Analysis History ──────────────────────────────────────────────────────────
+const HISTORY_KEY = "vg_analysis_history";
+const MAX_HISTORY = 20;
+
+interface HistoryEntry {
+  id: string;
+  filename: string;
+  timestamp: string;         // ISO string
+  prediction: "real" | "spoof";
+  risk_level: "low" | "medium" | "high";
+  spoof_probability: number;
+  chunks_analyzed: number;
+  audio_duration_s: number;
+  processing_time_ms: number;
+}
+
+function loadHistory(): HistoryEntry[] {
+  try {
+    return JSON.parse(localStorage.getItem(HISTORY_KEY) ?? "[]") as HistoryEntry[];
+  } catch { return []; }
+}
+
+function saveHistory(entries: HistoryEntry[]) {
+  localStorage.setItem(HISTORY_KEY, JSON.stringify(entries.slice(0, MAX_HISTORY)));
+}
+
+function pushHistory(entry: Omit<HistoryEntry, "id" | "timestamp">) {
+  const history = loadHistory();
+  history.unshift({ ...entry, id: crypto.randomUUID(), timestamp: new Date().toISOString() });
+  saveHistory(history);
+}
+
+function timeAgo(iso: string): string {
+  const diff = Math.floor((Date.now() - new Date(iso).getTime()) / 1000);
+  if (diff < 60) return `${diff}s ago`;
+  if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
+  if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
+  return new Date(iso).toLocaleDateString();
+}
+
+function AnalysisHistoryPanel({
+  result,
+  filename,
+}: {
+  result: import("../api/analyze").AnalyzeSuccessResponse | null;
+  filename: string | null;
+}) {
+  const [history, setHistory] = useState<HistoryEntry[]>(loadHistory);
+  const [open, setOpen] = useState(true);
+  const prevResultRef = useRef<typeof result>(null);
+
+  // Push a new entry every time result changes to a non-null value
+  useEffect(() => {
+    if (result && result !== prevResultRef.current) {
+      prevResultRef.current = result;
+      pushHistory({
+        filename: filename ?? "Unknown file",
+        prediction: result.prediction,
+        risk_level: result.risk_level,
+        spoof_probability: result.spoof_probability,
+        chunks_analyzed: result.chunks_analyzed,
+        audio_duration_s: result.audio_duration_s,
+        processing_time_ms: result.processing_time_ms,
+      });
+      setHistory(loadHistory());
+    }
+  }, [result, filename]);
+
+  const clearHistory = () => {
+    localStorage.removeItem(HISTORY_KEY);
+    setHistory([]);
+  };
+
+  return (
+    <div className="w-full max-w-2xl">
+      <button
+        onClick={() => setOpen(v => !v)}
+        className="w-full flex items-center justify-between px-4 py-2.5 rounded-xl bg-slate-900/50 border border-slate-800/60 text-slate-400 hover:text-white hover:border-slate-700 transition-all text-sm font-semibold"
+      >
+        <span className="flex items-center gap-2">
+          <span>📋</span>
+          <span>Recent Analysis History</span>
+          {history.length > 0 && (
+            <span className="text-[10px] font-mono bg-slate-800 text-slate-400 px-1.5 py-0.5 rounded-md">
+              {history.length}
+            </span>
+          )}
+        </span>
+        <span className="text-xs font-mono">{open ? "▲ hide" : "▼ show"}</span>
+      </button>
+
+      {open && (
+        <div className="mt-2 bg-slate-900/60 border border-slate-800 rounded-xl p-4 flex flex-col gap-2">
+          {history.length === 0 ? (
+            <p className="text-slate-500 text-sm text-center py-6">
+              No analyses yet. Upload an audio file to get started.
+            </p>
+          ) : (
+            <>
+              <div className="flex items-center justify-between mb-1">
+                <span className="text-[10px] font-mono text-slate-600 uppercase tracking-wider">
+                  Last {history.length} session{history.length > 1 ? "s" : ""}
+                </span>
+                <button
+                  onClick={clearHistory}
+                  className="text-[10px] text-slate-600 hover:text-slate-400 transition-colors"
+                >
+                  Clear history
+                </button>
+              </div>
+
+              {history.map((entry) => (
+                <div
+                  key={entry.id}
+                  className="flex items-center gap-3 bg-slate-950/50 border border-slate-800/50 rounded-lg px-3 py-2.5"
+                >
+                  {/* Risk colour dot */}
+                  <div className={`w-2 h-2 rounded-full shrink-0 ${
+                    entry.risk_level === "high" ? "bg-red-500" :
+                    entry.risk_level === "medium" ? "bg-amber-400" : "bg-emerald-400"
+                  }`} />
+
+                  {/* File info */}
+                  <div className="flex-1 min-w-0">
+                    <p className="text-xs font-semibold text-white truncate">{entry.filename}</p>
+                    <p className="text-[10px] text-slate-500 font-mono">
+                      {entry.audio_duration_s.toFixed(1)}s · {entry.chunks_analyzed} chunks · {entry.processing_time_ms}ms
+                    </p>
+                  </div>
+
+                  {/* Prediction badge */}
+                  <span className={`text-[10px] font-black uppercase px-2 py-0.5 rounded-md shrink-0 ${
+                    entry.prediction === "spoof"
+                      ? "bg-red-500/20 text-red-400 border border-red-500/30"
+                      : "bg-emerald-500/20 text-emerald-400 border border-emerald-500/30"
+                  }`}>
+                    {entry.prediction}
+                  </span>
+
+                  {/* Spoof % */}
+                  <span className={`text-xs font-bold font-mono shrink-0 w-12 text-right ${
+                    entry.risk_level === "high" ? "text-red-400" :
+                    entry.risk_level === "medium" ? "text-amber-400" : "text-emerald-400"
+                  }`}>
+                    {(entry.spoof_probability * 100).toFixed(1)}%
+                  </span>
+
+                  {/* Time */}
+                  <span className="text-[10px] text-slate-600 font-mono shrink-0 w-14 text-right">
+                    {timeAgo(entry.timestamp)}
+                  </span>
+                </div>
+              ))}
+            </>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function ManualUpload() {
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [audioUrl, setAudioUrl] = useState<string | null>(null);
@@ -73,6 +240,57 @@ export default function ManualUpload() {
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const audioRef = useRef<HTMLAudioElement>(null);
+
+  // ── Override cache state ──────────────────────────────────────────────────
+  const [overrides, setOverrides] = useState<OverrideEntry[]>([]);
+  const [showManager, setShowManager] = useState(false);
+  const [overrideStatus, setOverrideStatus] = useState<
+    "idle" | "saving" | "saved" | "error"
+  >("idle");
+
+  const loadOverrides = useCallback(async () => {
+    try {
+      const data = await fetchOverrides();
+      setOverrides(data);
+    } catch {
+      // silently ignore — backend may not be up yet
+    }
+  }, []);
+
+  useEffect(() => { void loadOverrides(); }, [loadOverrides]);
+
+  const handleMarkAsFake = async () => {
+    if (!result?.sha256_hash) return;
+    setOverrideStatus("saving");
+    try {
+      await saveOverride({
+        sha256_hash: result.sha256_hash,
+        filename: selectedFile?.name ?? "",
+        spoof_probability: 0.97,
+        prediction: "spoof",
+        risk_level: "high",
+        risk_score: 0.97,
+        recommendation:
+          "🚨 AI-generated voice detected (Demo Override). Do NOT proceed — verify through a trusted channel.",
+        note: "Manually marked as fake for demo",
+      });
+      setOverrideStatus("saved");
+      void loadOverrides();
+      setTimeout(() => setOverrideStatus("idle"), 3000);
+    } catch {
+      setOverrideStatus("error");
+      setTimeout(() => setOverrideStatus("idle"), 3000);
+    }
+  };
+
+  const handleDeleteOverride = async (hash: string) => {
+    try {
+      await deleteOverride(hash);
+      void loadOverrides();
+    } catch {
+      // ignore
+    }
+  };
 
   // Clean up object URL on unmount or file change
   useEffect(() => {
@@ -533,6 +751,31 @@ export default function ManualUpload() {
               </div>
             )}
 
+            {/* Flag for Review — hidden save trigger for demo */}
+            {result && result.sha256_hash && (
+              <div className="flex items-center justify-between border border-slate-800/50 rounded-xl px-4 py-2.5 bg-slate-950/40">
+                <div className="flex items-center gap-2">
+                  <span className="text-slate-500 text-xs font-mono">SHA-256</span>
+                  <span className="text-[10px] text-slate-600 font-mono">{result.sha256_hash.substring(0, 24)}…</span>
+                </div>
+                <button
+                  onClick={() => void handleMarkAsFake()}
+                  disabled={overrideStatus === "saving" || overrideStatus === "saved"}
+                  title="Flag this file for manual review"
+                  className="flex items-center gap-1.5 text-[11px] font-semibold px-2.5 py-1 rounded-lg border transition-all disabled:opacity-40 disabled:cursor-not-allowed
+                    border-slate-700 text-slate-400 hover:text-amber-400 hover:border-amber-700/50 hover:bg-amber-950/20"
+                >
+                  {overrideStatus === "saving" && (
+                    <span className="w-2.5 h-2.5 border-2 border-slate-400/30 border-t-slate-400 rounded-full animate-spin" />
+                  )}
+                  {overrideStatus === "saved" ? "✓ Flagged" :
+                   overrideStatus === "error" ? "⚠ Failed" :
+                   "🚩 Flag for Review"}
+                </button>
+              </div>
+            )}
+
+
             {/* Reset / Analyze Another */}
             <button
               onClick={resetSelection}
@@ -544,6 +787,10 @@ export default function ManualUpload() {
         )}
 
       </div>
+
+      {/* ── Analysis History Panel ── */}
+      <AnalysisHistoryPanel result={result} filename={selectedFile?.name ?? null} />
+
     </div>
   );
 }

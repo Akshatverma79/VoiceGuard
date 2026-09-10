@@ -22,8 +22,10 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from api.health import router as health_router
 from api.analyze import router as analyze_router
+from api.overrides import router as overrides_router
 from services.model_manager import ModelManager
 from websocket.audio_stream import handle_audio_stream
+from db.database import init_db
 
 
 # ---------------------------------------------------------------------------
@@ -33,9 +35,10 @@ from websocket.audio_stream import handle_audio_stream
 async def lifespan(app: FastAPI):
     """
     FastAPI lifespan context manager.
-    Loads the AASIST model at startup so all routes share one instance.
+    Initialises the SQLite cache DB, then loads the AI model.
     """
-    await ModelManager.initialize()
+    init_db()                       # create tables if missing
+    await ModelManager.initialize() # load Wav2Vec2 model once
     yield
     # Nothing to release — PyTorch handles its own cleanup
 
@@ -69,6 +72,7 @@ app.add_middleware(
 # ---------------------------------------------------------------------------
 app.include_router(health_router)
 app.include_router(analyze_router)
+app.include_router(overrides_router)
 
 
 # ---------------------------------------------------------------------------
